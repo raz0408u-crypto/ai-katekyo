@@ -1,0 +1,146 @@
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: #111827;
+  color: #e5e7eb;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.app {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+h1 { margin-bottom: 4px; }
+h2 { margin-top: 0; }
+
+#status {
+  margin-top: 0;
+  color: #9ca3af;
+}
+
+.model {
+  padding: 8px 12px;
+  border: 1px solid #374151;
+  border-radius: 999px;
+  color: #d1d5db;
+}
+
+.profile, .problem-box {
+  background: #1f2937;
+  border: 1px solid #374151;
+  border-radius: 14px;
+  padding: 16px;
+  margin-top: 16px;
+}
+
+#goal {
+  margin-top: 6px;
+  color: #9ca3af;
+}
+
+.chat {
+  height: 480px;
+  overflow-y: auto;
+  margin-top: 16px;
+  padding: 16px;
+  background: #0b1220;
+  border: 1px solid #374151;
+  border-radius: 14px;
+}
+
+.message {
+  max-width: 80%;
+  padding: 12px 14px;
+  margin: 10px 0;
+  border-radius: 12px;
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
+.message.user {
+  margin-left: auto;
+  background: #2563eb;
+}
+
+.message.assistant {
+  margin-right: auto;
+  background: #374151;
+}
+
+.input-area {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+textarea, input, select {
+  width: 100%;
+  background: #111827;
+  color: #e5e7eb;
+  border: 1px solid #4b5563;
+  border-radius: 10px;
+  padding: 10px;
+  font: inherit;
+}
+
+.input-area textarea {
+  resize: vertical;
+}
+
+button {
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 16px;
+  background: #2563eb;
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:hover {
+  filter: brightness(1.1);
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: 1fr 1.5fr 1fr auto;
+  gap: 8px;
+}
+
+.problem {
+  margin-top: 14px;
+  line-height: 1.7;
+}
+
+.problem h3 {
+  white-space: pre-wrap;
+}
+
+.hint {
+  color: #9ca3af;
+}
+
+#result {
+  margin-top: 14px;
+  padding: 12px;
+  background: #111827;
+  border-radius: 10px;
+  line-height: 1.7;
+}
+
+@media (max-width: 700px) {
+  .app { padding: 12px; }
+  .controls { grid-template-columns: 1fr; }
+  .input-area { flex-direction: column; }
+  .message { max-width: 90%; }
+}

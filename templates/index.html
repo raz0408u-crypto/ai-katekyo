@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI家庭教師</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="app">
+    <header>
+      <div>
+        <h1>AI家庭教師</h1>
+        <p id="status">接続確認中...</p>
+      </div>
+      <div class="model">Gemini 3.6 Flash</div>
+    </header>
+
+    <section class="profile">
+      <div><b id="grade">高校1年生</b></div>
+      <div id="goal">目標を読み込み中...</div>
+    </section>
+
+    <section id="chat" class="chat"></section>
+
+    <form id="chatForm" class="input-area">
+      <textarea id="message" rows="3" placeholder="質問や分からないところを書いてください"></textarea>
+      <button type="submit">送信</button>
+    </form>
+
+    <section class="problem-box">
+      <h2>練習問題</h2>
+      <div class="controls">
+        <select id="subject">
+          <option>国語</option>
+          <option>英語</option>
+          <option>数学</option>
+          <option>情報</option>
+        </select>
+        <input id="topic" value="現代文" placeholder="単元">
+        <select id="difficulty">
+          <option>基礎</option>
+          <option>標準</option>
+          <option>応用</option>
+        </select>
+        <button id="makeProblem" type="button">問題を作る</button>
+      </div>
+      <div id="problem" class="problem"></div>
+    </section>
+  </main>
+
+<script>
+const chat = document.getElementById("chat");
+const statusEl = document.getElementById("status");
+
+function addMessage(role, text) {
+  const div = document.createElement("div");
+  div.className = "message " + role;
+  div.textContent = text;
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+async function loadProfile() {
+  const res = await fetch("/api/profile");
+  const data = await res.json();
+
+  document.getElementById("grade").textContent = data.student.grade;
+  document.getElementById("goal").textContent = "目標: " + data.student.goal;
+
+  chat.innerHTML = "";
+  for (const m of data.messages) {
+    if (m.role === "user" || m.role === "assistant") {
+      addMessage(m.role, m.content);
+    }
+  }
+  statusEl.textContent = "接続OK";
+}
+
+document.getElementById("chatForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const input = document.getElementById("message");
+  const text = input.value.trim();
+  if (!text) return;
+
+  addMessage("user", text);
+  input.value = "";
+
+  addMessage("assistant", "考え中...");
+
+  try {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({message: text})
+    });
+    const data = await res.json();
+
+    chat.lastChild.remove();
+
+    if (!res.ok) {
+      addMessage("assistant", "エラー: " + (data.error || "不明なエラー"));
+      return;
+    }
+
+    addMessage("assistant", data.answer);
+  } catch (err) {
+    chat.lastChild.remove();
+    addMessage("assistant", "通信エラー: " + err.message);
+  }
+});
+
+document.getElementById("makeProblem").addEventListener("click", async () => {
+  const box = document.getElementById("problem");
+  box.textContent = "問題を作成中...";
+
+  try {
+    const res = await fetch("/api/problem", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        subject: document.getElementById("subject").value,
+        topic: document.getElementById("topic").value,
+        difficulty: document.getElementById("difficulty").value
+      })
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      box.textContent = "エラー: " + (data.error || "不明なエラー");
+      return;
+    }
+
+    box.innerHTML = `
+      <h3>${escapeHtml(data.question)}</h3>
+      <p class="hint">ヒント: ${escapeHtml(data.hint)}</p>
+      <textarea id="answer" rows="3" placeholder="答えを書いてください"></textarea>
+      <button id="gradeButton" type="button">採点する</button>
+      <div id="result"></div>
+    `;
+
+    document.getElementById("gradeButton").onclick = async () => {
+      const userAnswer = document.getElementById("answer").value.trim();
+      if (!userAnswer) return;
+
+      const result = document.getElementById("result");
+      result.textContent = "採点中...";
+
+      const gradeRes = await fetch("/api/answer", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          subject: document.getElementById("subject").value,
+          topic: document.getElementById("topic").value,
+          question: data.question,
+          correct_answer: data.answer,
+          user_answer: userAnswer
+        })
+      });
+
+      const gradeData = await gradeRes.json();
+
+      if (!gradeRes.ok) {
+        result.textContent = "エラー: " + (gradeData.error || "不明なエラー");
+        return;
+      }
+
+      result.innerHTML =
+        `<b>${gradeData.correct ? "正解！" : "もう一歩！"}</b><br>` +
+        escapeHtml(gradeData.feedback) +
+        "<br>" + escapeHtml(gradeData.reason) +
+        `<br>理解度: ${gradeData.mastery_level}/5`;
+    };
+  } catch (err) {
+    box.textContent = "通信エラー: " + err.message;
+  }
+});
+
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+loadProfile().catch(err => {
+  statusEl.textContent = "接続エラー";
+  addMessage("assistant", "サーバーに接続できませんでした: " + err.message);
+});
+</script>
+</body>
+</html>
