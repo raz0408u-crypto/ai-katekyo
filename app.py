@@ -468,8 +468,9 @@ def answer():
         app.logger.exception("answer error")
         return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
 
+init_db()
+
 if __name__ == "__main__":
-    init_db()
     print(f"使用モデル: {MODEL}")
     print("AI家庭教師サーバーを起動します。")
     app.run(debug=True, host="127.0.0.1", port=5000)
