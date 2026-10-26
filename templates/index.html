@@ -5,6 +5,112 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>AI家庭教師</title>
   <link rel="stylesheet" href="/static/style.css">
+<style>
+/* 学習状況全体 */
+.learning-stats {
+    margin: 24px 0;
+    padding: 24px;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 16px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+}
+
+.learning-stats h2 {
+    margin-top: 0;
+    margin-bottom: 20px;
+    font-size: 24px;
+    color: #1f2937;
+}
+
+.learning-stats h3 {
+    margin-top: 28px;
+    margin-bottom: 16px;
+    font-size: 18px;
+    color: #374151;
+}
+
+/* 学習実績のカード */
+.stats-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+}
+
+.stats-summary p {
+    margin: 0;
+    padding: 18px;
+    background: #f3f6ff;
+    border: 1px solid #e0e7ff;
+    border-radius: 12px;
+    color: #374151;
+    font-size: 15px;
+    font-weight: bold;
+    line-height: 1.7;
+}
+
+/* グラフ */
+.stats-chart {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    margin: 16px 0 28px;
+}
+
+.stats-label {
+    margin-bottom: 8px;
+    color: #374151;
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+.stats-track {
+    width: 100%;
+    height: 14px;
+    overflow: hidden;
+    background: #e5e7eb;
+    border-radius: 999px;
+}
+
+.stats-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #60a5fa, #6366f1);
+    border-radius: 999px;
+    transition: width 0.4s ease;
+}
+
+/* 更新ボタン */
+#refreshStats {
+    padding: 10px 18px;
+    border: none;
+    border-radius: 10px;
+    background: #4f46e5;
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.2s ease;
+}
+
+#refreshStats:hover {
+    background: #4338ca;
+}
+
+/* スマホでも見やすくする */
+@media (max-width: 600px) {
+    .learning-stats {
+        padding: 16px;
+    }
+
+    .learning-stats h2 {
+        font-size: 21px;
+    }
+
+    .stats-summary {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
 </head>
 <body>
   <main class="app">
@@ -20,6 +126,30 @@
       <div><b id="grade">高校1年生</b></div>
       <div id="goal">目標を読み込み中...</div>
     </section>
+    
+<section class="suggestions">
+  <h2>学習おすすめ</h2>
+
+  <div id="suggestionsList">
+    おすすめを読み込み中...
+  </div>
+
+  <button type="button" id="refreshSuggestions">
+    おすすめを更新
+  </button>
+</section>
+
+<section class="learning-stats">
+  <h2>学習状況</h2>
+
+  <div id="learningStats">
+    学習データを読み込み中...
+  </div>
+
+  <button type="button" id="refreshStats">
+    学習状況を更新
+  </button>
+</section>
 
     <section id="chat" class="chat"></section>
 
@@ -172,6 +302,8 @@ document.getElementById("makeProblem").addEventListener("click", async () => {
         escapeHtml(gradeData.feedback) +
         "<br>" + escapeHtml(gradeData.reason) +
         `<br>理解度: ${gradeData.mastery_level}/5`;
+
+      loadLearningStats();
     };
   } catch (err) {
     box.textContent = "通信エラー: " + err.message;
@@ -188,6 +320,183 @@ loadProfile().catch(err => {
   statusEl.textContent = "接続エラー";
   addMessage("assistant", "サーバーに接続できませんでした: " + err.message);
 });
+
+async function loadSuggestions() {
+    const list = document.getElementById("suggestionsList");
+    list.textContent = "おすすめを読み込み中...";
+
+    try {
+        const response = await fetch("/api/suggestions");
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || "取得に失敗しました");
+        }
+
+        const suggestions = data.suggestions || [];
+
+        if (suggestions.length === 0) {
+            list.textContent =
+                "まだおすすめはありません。学習履歴が増えると表示されます。";
+            return;
+        }
+
+        list.replaceChildren();
+
+        suggestions.forEach(item => {
+            const card = document.createElement("div");
+            card.className = "suggestion-card";
+
+            const title = document.createElement("h3");
+            title.textContent = `${item.subject}：${item.topic}`;
+
+            const type = document.createElement("p");
+            type.textContent =
+                item.type === "weakness"
+                    ? "苦手分野の復習"
+                    : item.type === "review"
+                    ? "基礎の復習"
+                    : "理解を深める練習";
+
+            const reason = document.createElement("p");
+            reason.textContent = item.reason;
+
+            card.append(title, type, reason);
+            list.appendChild(card);
+        });
+    } catch (error) {
+        list.textContent =
+            "おすすめの取得に失敗しました：" + error.message;
+    }
+}
+
+document.getElementById("refreshSuggestions")
+    .addEventListener("click", loadSuggestions);
+
+loadSuggestions();
+
+
+async function loadLearningStats() {
+    const container = document.getElementById("learningStats");
+
+    if (!container) return;
+
+    container.textContent = "学習状況を読み込み中...";
+
+    try {
+        const response = await fetch("/api/learning-stats");
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || "取得に失敗しました");
+        }
+
+        // 全体の学習実績
+        const summary = document.createElement("div");
+        summary.className = "stats-summary";
+
+        const total = document.createElement("p");
+        total.textContent = `問題を解いた回数：${data.total_attempts}回`;
+
+        const correct = document.createElement("p");
+        correct.textContent = `正解数：${data.correct_attempts}問`;
+
+        const accuracy = document.createElement("p");
+        accuracy.textContent = `全体の正答率：${data.accuracy}%`;
+
+        summary.append(total, correct, accuracy);
+
+        // 教科ごとの正答率グラフ
+        const subjectHeading = document.createElement("h3");
+        subjectHeading.textContent = "教科ごとの正答率";
+
+        const subjectChart = document.createElement("div");
+        subjectChart.className = "stats-chart";
+
+        if (!data.subject_stats || data.subject_stats.length === 0) {
+            subjectChart.textContent =
+                "まだ採点履歴がありません。問題を解くと表示されます。";
+        } else {
+            data.subject_stats.forEach(item => {
+                const row = document.createElement("div");
+                row.className = "stats-row";
+
+                const label = document.createElement("div");
+                label.className = "stats-label";
+                label.textContent =
+                    `${item.subject || "未分類"}（${item.accuracy}%・${item.total}問）`;
+
+                const track = document.createElement("div");
+                track.className = "stats-track";
+
+                const bar = document.createElement("div");
+                bar.className = "stats-bar";
+                bar.style.width = `${Math.max(0, Math.min(100, item.accuracy))}%`;
+
+                track.appendChild(bar);
+                row.append(label, track);
+                subjectChart.appendChild(row);
+            });
+        }
+
+        // 分野ごとの理解度グラフ
+        const masteryHeading = document.createElement("h3");
+        masteryHeading.textContent = "分野ごとの理解度";
+
+        const masteryChart = document.createElement("div");
+        masteryChart.className = "stats-chart";
+
+        if (!data.mastery || data.mastery.length === 0) {
+            masteryChart.textContent =
+                "まだ理解度データがありません。問題を解くと表示されます。";
+        } else {
+            data.mastery.forEach(item => {
+                const row = document.createElement("div");
+                row.className = "stats-row";
+
+                const label = document.createElement("div");
+                label.className = "stats-label";
+                label.textContent =
+                    `${item.subject}：${item.topic}（${item.level}/5）`;
+
+                const track = document.createElement("div");
+                track.className = "stats-track";
+
+                const level = Math.max(0, Math.min(5, Number(item.level) || 0));
+                const bar = document.createElement("div");
+                bar.className = "stats-bar";
+                bar.style.width = `${level * 20}%`;
+
+                track.appendChild(bar);
+                row.append(label, track);
+                masteryChart.appendChild(row);
+            });
+        }
+
+        container.replaceChildren(
+            summary,
+            subjectHeading,
+            subjectChart,
+            masteryHeading,
+            masteryChart
+        );
+    } catch (error) {
+        container.textContent =
+            "学習状況の取得に失敗しました：" + error.message;
+    }
+}
+
+// 更新ボタン
+const refreshStats = document.getElementById("refreshStats");
+
+if (refreshStats) {
+    refreshStats.addEventListener("click", loadLearningStats);
+}
+
+// ページを開いたときに読み込む
+loadLearningStats();
+
+
 </script>
 </body>
 </html>

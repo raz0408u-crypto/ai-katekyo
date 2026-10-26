@@ -1,24 +1,41 @@
+
 import os
 import json
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request
-from google import genai
+from flask import Flask, jsonify, render_template, request, session
+from groq import Groq
 
 load_dotenv()
 
 app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-key")
+
+
+def get_student_id():
+    if "student_id" not in session:
+        session["student_id"] = f"student_{uuid.uuid4().hex}"
+    return session["student_id"]
+
+
+@app.before_request
+def prepare_student():
+    if request.endpoint == "static":
+        return
+    ensure_student()
+
 
 DB_PATH = os.getenv("TUTOR_DB_PATH", "tutor.db")
-MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
-STUDENT_ID = "demo_student_001"
+MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 SYSTEM_PROMPT = """
 あなたは高校生専用の個別指導AI教師です。
 
-目的は、答えを一方的に教えることではなく、生徒が自分で理解して問題を解けるようにすることです。
+目的は、答えを一方的に教えることではなく、
+生徒が自分で理解して問題を解けるようにすることです。
 
 【指導方針】
 - 高校生にも分かる日本語で説明する。
@@ -30,17 +47,21 @@ SYSTEM_PROMPT = """
 - 「分からない」と言われたら、難易度を下げて一段階ずつ説明する。
 - 生徒の学習履歴を参考にして、以前の弱点を必要に応じて復習する。
 - 生徒が求めた場合は、問題を一緒に解く。
-- 学習上の重要な変化は、アプリ側の記録機能で保存される。AIが保存したと断言してはいけない。
+- 学習上の重要な変化は、アプリ側の記録機能で保存される。
+  AIが保存したと断言してはいけない。
 - 個人情報やAPIキーなどの秘密情報を要求しない。
 """
 
+
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
+
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
 
 def init_db():
     conn = get_db()
@@ -86,79 +107,194 @@ def init_db():
         created_at TEXT NOT NULL
     );
     """)
-
-    existing = conn.execute(
-        "SELECT id FROM students WHERE id = ?", (STUDENT_ID,)
-    ).fetchone()
-
-    if not existing:
-        now = utc_now()
-        conn.execute(
-            """INSERT INTO students
-               (id, name, grade, goal, notes, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (
-                STUDENT_ID,
-                "生徒",
-                "高校1年生",
-                "自分に合った勉強方法を見つけて、少しずつ成績を上げる",
-                "",
-                now,
-                now,
-            ),
-        )
-    conn.commit()
     conn.close()
 
+
 def get_client():
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         raise RuntimeError(
-            "GEMINI_API_KEY がありません。.env にGemini APIキーを設定してください。"
+            "GROQ_API_KEY がありません。.env にGroq APIキーを設定してください。"
         )
-    return genai.Client(api_key=api_key)
+    return Groq(api_key=api_key)
+
 
 def get_student():
     conn = get_db()
-    row = conn.execute(
-        "SELECT * FROM students WHERE id = ?", (STUDENT_ID,)
-    ).fetchone()
-    conn.close()
-    return dict(row)
+    try:
+        row = conn.execute(
+            "SELECT * FROM students WHERE id = ?",
+            (get_student_id(),)
+        ).fetchone()
+
+        if row is None:
+            raise RuntimeError("生徒情報が見つかりません。")
+
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def ensure_student():
+    student_id = get_student_id()
+    conn = get_db()
+
+    try:
+        row = conn.execute(
+            "SELECT id FROM students WHERE id = ?",
+            (student_id,)
+        ).fetchone()
+
+        if row is None:
+            now = utc_now()
+            conn.execute(
+                """
+                INSERT INTO students
+                (id, name, grade, goal, notes, interaction_id,
+                 created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    student_id,
+                    "生徒",
+                    "高校1年生",
+                    "自分に合った勉強方法を見つけて、少しずつ成績を上げる",
+                    "",
+                    "",
+                    now,
+                    now
+                )
+            )
+            conn.commit()
+    finally:
+        conn.close()
+
 
 def get_recent_messages(limit=20):
     conn = get_db()
-    rows = conn.execute(
-        """SELECT role, content, created_at
-           FROM messages
-           WHERE student_id = ?
-           ORDER BY id DESC LIMIT ?""",
-        (STUDENT_ID, limit),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in reversed(rows)]
+    try:
+        rows = conn.execute(
+            """
+            SELECT role, content, created_at
+            FROM messages
+            WHERE student_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (get_student_id(), limit),
+        ).fetchall()
+
+        return [dict(row) for row in reversed(rows)]
+    finally:
+        conn.close()
+
 
 def get_mastery():
     conn = get_db()
-    rows = conn.execute(
-        """SELECT subject, topic, level, note, updated_at
-           FROM topic_mastery
-           WHERE student_id = ?
-           ORDER BY updated_at DESC""",
-        (STUDENT_ID,),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    try:
+        rows = conn.execute(
+            """
+            SELECT subject, topic, level, note, updated_at
+            FROM topic_mastery
+            WHERE student_id = ?
+            ORDER BY updated_at DESC
+            """,
+            (get_student_id(),)
+        ).fetchall()
+
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def get_attempts(limit=100):
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT subject, topic, question, answer,
+                   correct, feedback, created_at
+            FROM attempts
+            WHERE student_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (get_student_id(), limit)
+        ).fetchall()
+
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def get_learning_suggestions():
+    mastery = get_mastery()
+    attempts = get_attempts(limit=100)
+
+    suggestions = []
+
+    # 理解度をもとに復習候補を作る
+    for item in mastery:
+        level = item.get("level", 0)
+        subject = item.get("subject", "")
+        topic = item.get("topic", "")
+
+        if level <= 2:
+            suggestions.append({
+                "type": "review",
+                "subject": subject,
+                "topic": topic,
+                "reason": f"理解度が{level}/5なので、基礎を復習しよう"
+            })
+        elif level == 3:
+            suggestions.append({
+                "type": "practice",
+                "subject": subject,
+                "topic": topic,
+                "reason": "例題を解いて理解を深めよう"
+            })
+
+    # 間違いが多い分野を探す
+    mistake_counts = {}
+
+    for item in attempts:
+        if not item.get("correct"):
+            key = (item["subject"], item["topic"])
+            mistake_counts[key] = mistake_counts.get(key, 0) + 1
+
+    for (subject, topic), count in mistake_counts.items():
+        if count >= 2:
+            suggestions.append({
+                "type": "weakness",
+                "subject": subject,
+                "topic": topic,
+                "reason": f"過去の記録で間違いが{count}回あるため、復習がおすすめ"
+            })
+
+    # 同じ分野のおすすめが重複しないようにする
+    unique = {}
+    for item in suggestions:
+        key = (item["subject"], item["topic"])
+        if key not in unique or item["type"] == "weakness":
+            unique[key] = item
+
+    return list(unique.values())[:10]
+
 
 def save_message(role, content):
     conn = get_db()
-    conn.execute(
-        """INSERT INTO messages(student_id, role, content, created_at)
-           VALUES (?, ?, ?, ?)""",
-        (STUDENT_ID, role, content, utc_now()),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            """
+            INSERT INTO messages(student_id, role, content, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (get_student_id(), role, content, utc_now()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
 
 def build_context():
     student = get_student()
@@ -179,28 +315,40 @@ def build_context():
 {json.dumps(messages, ensure_ascii=False, indent=2)}
 """
 
-def call_interaction(input_text, previous_interaction_id=None, system_instruction=SYSTEM_PROMPT):
+
+def call_interaction(
+    input_text,
+    previous_interaction_id=None,
+    system_instruction=SYSTEM_PROMPT
+):
+    # GeminiのInteractions APIからGroqのChat Completions APIへ変更
+    # 会話履歴はbuild_context()で取得して入力に含める
     client = get_client()
 
-    kwargs = {
-        "model": MODEL,
-        "system_instruction": system_instruction,
-        "input": input_text,
-        "generation_config": {
-            "temperature": 0.7,
-        },
-    }
+    completion = client.chat.completions.create(
+        model=MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": system_instruction
+            },
+            {
+                "role": "user",
+                "content": input_text
+            }
+        ],
+        temperature=0.7,
+    )
 
-    if previous_interaction_id:
-        kwargs["previous_interaction_id"] = previous_interaction_id
+    answer = completion.choices[0].message.content or ""
+    answer = answer.strip()
 
-    interaction = client.interactions.create(**kwargs)
+    if not answer:
+        raise RuntimeError("Groqからテキスト回答が返りませんでした。")
 
-    text = (interaction.output_text or "").strip()
-    if not text:
-        raise RuntimeError("Geminiからテキスト回答が返りませんでした。")
+    # 既存の呼び出し元との互換性を保つためIDと回答を返す
+    return completion.id, answer
 
-    return interaction.id, text
 
 def parse_json(text):
     text = text.strip()
@@ -221,6 +369,7 @@ def parse_json(text):
         if start != -1 and end != -1 and end > start:
             return json.loads(text[start:end + 1])
         raise
+
 
 def generate_problem(subject, topic, difficulty):
     prompt = f"""
@@ -258,6 +407,7 @@ def generate_problem(subject, topic, difficulty):
 
     return data
 
+
 def grade_answer(subject, topic, question, correct_answer, user_answer):
     prompt = f"""
 高校生の問題回答を採点してください。
@@ -278,6 +428,7 @@ def grade_answer(subject, topic, question, correct_answer, user_answer):
 }}
 
 mastery_level は 0〜5 の整数です。
+correct は true または false にしてください。
 """
 
     json_system = """
@@ -292,25 +443,40 @@ mastery_level は 0〜5 の整数です。
     )
     return parse_json(text)
 
+
 def update_mastery(subject, topic, level, note):
     level = max(0, min(5, int(level)))
     conn = get_db()
-    conn.execute(
-        """INSERT INTO topic_mastery(student_id, subject, topic, level, note, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?)
-           ON CONFLICT(student_id, subject, topic)
-           DO UPDATE SET
-             level=excluded.level,
-             note=excluded.note,
-             updated_at=excluded.updated_at""",
-        (STUDENT_ID, subject, topic, level, note, utc_now()),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            """
+            INSERT INTO topic_mastery
+            (student_id, subject, topic, level, note, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(student_id, subject, topic)
+            DO UPDATE SET
+                level=excluded.level,
+                note=excluded.note,
+                updated_at=excluded.updated_at
+            """,
+            (
+                get_student_id(),
+                subject,
+                topic,
+                level,
+                note,
+                utc_now()
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
 
 @app.route("/")
 def index():
     return render_template("index.html")
+
 
 @app.get("/api/health")
 def health():
@@ -319,6 +485,7 @@ def health():
         "model": MODEL,
         "message": "AI家庭教師サーバーは起動しています。",
     })
+
 
 @app.get("/api/profile")
 def profile():
@@ -329,6 +496,14 @@ def profile():
         "messages": get_recent_messages(30),
     })
 
+
+@app.get("/api/suggestions")
+def suggestions():
+    return jsonify({
+        "suggestions": get_learning_suggestions()
+    })
+
+
 @app.post("/api/chat")
 def chat():
     try:
@@ -338,7 +513,6 @@ def chat():
         if not user_message:
             return jsonify({"error": "メッセージを入力してください。"}), 400
 
-        student = get_student()
         context = build_context()
 
         prompt = f"""
@@ -351,24 +525,27 @@ def chat():
 生徒が自分で考えられるように、必要なら質問やヒントを使ってください。
 """
 
-        previous_id = student.get("interaction_id") or None
-
         save_message("user", user_message)
 
-        interaction_id, answer = call_interaction(
-            prompt,
-            previous_interaction_id=previous_id,
-        )
+        interaction_id, answer = call_interaction(prompt)
 
         save_message("assistant", answer)
 
+        # 古いDB構造との互換性のためID欄は維持する。
+        # Groqでは次の会話をこのIDで再開せず、messagesの履歴を利用する。
         conn = get_db()
-        conn.execute(
-            "UPDATE students SET interaction_id = ?, updated_at = ? WHERE id = ?",
-            (interaction_id, utc_now(), STUDENT_ID),
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                """
+                UPDATE students
+                SET interaction_id = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (interaction_id, utc_now(), get_student_id())
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
         return jsonify({
             "answer": answer,
@@ -378,6 +555,7 @@ def chat():
     except Exception as e:
         app.logger.exception("chat error")
         return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
+
 
 @app.post("/api/problem")
 def problem():
@@ -390,24 +568,29 @@ def problem():
         result = generate_problem(subject, topic, difficulty)
 
         conn = get_db()
-        conn.execute(
-            """INSERT INTO messages(student_id, role, content, created_at)
-               VALUES (?, ?, ?, ?)""",
-            (
-                STUDENT_ID,
-                "system",
-                f"問題生成: {subject}/{topic}/{difficulty}\n{result['question']}",
-                utc_now(),
-            ),
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                """
+                INSERT INTO messages(student_id, role, content, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    get_student_id(),
+                    "system",
+                    f"問題生成: {subject}/{topic}/{difficulty}\n{result['question']}",
+                    utc_now(),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
         return jsonify(result)
 
     except Exception as e:
         app.logger.exception("problem error")
         return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
+
 
 @app.post("/api/answer")
 def answer():
@@ -439,23 +622,28 @@ def answer():
         update_mastery(subject, topic, level, feedback)
 
         conn = get_db()
-        conn.execute(
-            """INSERT INTO attempts
-               (student_id, subject, topic, question, answer, correct, feedback, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                STUDENT_ID,
-                subject,
-                topic,
-                question,
-                user_answer,
-                int(correct),
-                f"{feedback}\n{reason}",
-                utc_now(),
-            ),
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                """
+                INSERT INTO attempts
+                (student_id, subject, topic, question, answer,
+                 correct, feedback, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    get_student_id(),
+                    subject,
+                    topic,
+                    question,
+                    user_answer,
+                    int(correct),
+                    f"{feedback}\n{reason}",
+                    utc_now(),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
         return jsonify({
             "correct": correct,
@@ -468,9 +656,77 @@ def answer():
         app.logger.exception("answer error")
         return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
 
+
 init_db()
+
+@app.get("/api/learning-stats")
+def api_learning_stats():
+    student_id = get_student_id()
+    conn = get_db()
+
+    try:
+        # 全体の採点回数と正解数
+        summary = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                COALESCE(SUM(correct), 0) AS correct_count
+            FROM attempts
+            WHERE student_id = ?
+            """,
+            (student_id,)
+        ).fetchone()
+
+        total = summary["total"]
+        correct_count = summary["correct_count"]
+
+        # 教科ごとの正答率
+        rows = conn.execute(
+            """
+            SELECT
+                subject,
+                COUNT(*) AS total,
+                COALESCE(SUM(correct), 0) AS correct_count
+            FROM attempts
+            WHERE student_id = ?
+            GROUP BY subject
+            ORDER BY subject
+            """,
+            (student_id,)
+        ).fetchall()
+
+        subject_stats = []
+
+        for row in rows:
+            count = row["total"]
+            correct = row["correct_count"]
+
+            subject_stats.append({
+                "subject": row["subject"],
+                "total": count,
+                "correct": correct,
+                "accuracy": round(correct / count * 100)
+                if count > 0 else 0
+            })
+
+    finally:
+        conn.close()
+
+    # 分野ごとの理解度を取得
+    mastery = get_mastery()
+
+    return jsonify({
+        "total_attempts": total,
+        "correct_attempts": correct_count,
+        "accuracy": round(correct_count / total * 100)
+        if total > 0 else 0,
+        "subject_stats": subject_stats,
+        "mastery": mastery
+    })
+
 
 if __name__ == "__main__":
     print(f"使用モデル: {MODEL}")
     print("AI家庭教師サーバーを起動します。")
     app.run(debug=True, host="127.0.0.1", port=5000)
+
