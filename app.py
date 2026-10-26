@@ -730,3 +730,4 @@ if __name__ == "__main__":
     print("AI家庭教師サーバーを起動します。")
     app.run(debug=True, host="127.0.0.1", port=5000)
 
+# GitDoc自動更新テスト
